@@ -502,12 +502,12 @@ jobs:
             exit 1
           fi
           dos2unix "$BASE_PATCH"
-          # 1) 打源码补丁（新增 drivers/misc/ntsync.c + include/uapi/linux/ntsync.h），失败即报错不吞
-          if ! git apply --ignore-whitespace "$BASE_PATCH"; then
-            echo "::error::ntsync_base.patch 应用失败，请检查补丁与内核版本匹配"
+          # 1) 打源码补丁：用确定性的 patch -p1（对新增文件最可靠），失败即报错不吞
+          if ! patch -p1 --ignore-whitespace < "$BASE_PATCH"; then
+            echo "::error::ntsync_base.patch 应用失败(patch -p1)，请检查补丁与内核版本匹配"
             exit 1
           fi
-          echo "  已应用 ntsync_base.patch (含 ntsync.c + uapi 头)"
+          echo "  已应用 ntsync_base.patch (patch -p1 确定性应用)"
           # 2) 手动接入 Makefile：不依赖 compat 补丁的行号锚点，直接追加，幂等
           if ! grep -q 'obj-$(CONFIG_NTSYNC)' drivers/misc/Makefile; then
             echo 'obj-$(CONFIG_NTSYNC) += ntsync.o' >> drivers/misc/Makefile
@@ -522,9 +522,11 @@ jobs:
           else
             echo "  drivers/misc/Kconfig 已含 NTSYNC"
           fi
-          # 4) 校验源码确实就位
+          # 4) 校验源码确实就位（先直接检查，再 find 兜底，避免 cwd/路径边界误判）
           if [ -f drivers/misc/ntsync.c ]; then
             echo "  ✓ drivers/misc/ntsync.c 存在"
+          elif find . -name "ntsync.c" -not -path './.git/*' 2>/dev/null | grep -q .; then
+            echo "  ✓ ntsync.c 已在源码树中 (find 定位)"
           else
             echo "::error::drivers/misc/ntsync.c 未找到，ntsync 源码缺失"
             exit 1
