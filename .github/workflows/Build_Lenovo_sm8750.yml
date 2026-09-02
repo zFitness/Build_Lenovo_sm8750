@@ -494,20 +494,42 @@ jobs:
         if: ${{ env.ENABLE_DROIDSPACES == 'true' }}
         working-directory: kernel_workspace/common
         run: |
+          set -e
           echo "==> 开始应用 ntsync 补丁..."
-          for PATCH_NAME in "ntsync_base.patch" "ntsync_compat_6.6.patch"; do
-            PATCH_PATH="${GITHUB_WORKSPACE}/patch/${PATCH_NAME}"
-            if [ ! -f "$PATCH_PATH" ]; then
-              echo "::error::未找到 ntsync 补丁: $PATCH_PATH"
-              exit 1
-            fi
-            echo "  应用: $PATCH_NAME"
-            dos2unix "$PATCH_PATH"
-            if ! git apply --ignore-whitespace "$PATCH_PATH"; then
-              echo "::warning::补丁 $PATCH_NAME 应用失败，可能已应用或上下文不匹配"
-            fi
-          done
-          echo "==> ntsync 补丁应用完成"
+          BASE_PATCH="${GITHUB_WORKSPACE}/patch/ntsync_base.patch"
+          if [ ! -f "$BASE_PATCH" ]; then
+            echo "::error::未找到 ntsync 补丁: $BASE_PATCH"
+            exit 1
+          fi
+          dos2unix "$BASE_PATCH"
+          # 1) 打源码补丁（新增 drivers/misc/ntsync.c + include/uapi/linux/ntsync.h），失败即报错不吞
+          if ! git apply --ignore-whitespace "$BASE_PATCH"; then
+            echo "::error::ntsync_base.patch 应用失败，请检查补丁与内核版本匹配"
+            exit 1
+          fi
+          echo "  已应用 ntsync_base.patch (含 ntsync.c + uapi 头)"
+          # 2) 手动接入 Makefile：不依赖 compat 补丁的行号锚点，直接追加，幂等
+          if ! grep -q 'obj-$(CONFIG_NTSYNC)' drivers/misc/Makefile; then
+            echo 'obj-$(CONFIG_NTSYNC) += ntsync.o' >> drivers/misc/Makefile
+            echo "  已向 drivers/misc/Makefile 追加 NTSYNC"
+          else
+            echo "  drivers/misc/Makefile 已含 NTSYNC"
+          fi
+          # 3) 手动接入 Kconfig：追加到结尾，绕开固定行号上下文，幂等
+          if ! grep -q '^config NTSYNC' drivers/misc/Kconfig; then
+            printf '\nconfig NTSYNC\n\ttristate "NT synchronization primitive emulation"\n\tdefault m\n\thelp\n\t  This module provides kernel support for emulation of Windows NT\n\t  synchronization primitives. It is not a hardware driver.\n' >> drivers/misc/Kconfig
+            echo "  已向 drivers/misc/Kconfig 追加 NTSYNC"
+          else
+            echo "  drivers/misc/Kconfig 已含 NTSYNC"
+          fi
+          # 4) 校验源码确实就位
+          if [ -f drivers/misc/ntsync.c ]; then
+            echo "  ✓ drivers/misc/ntsync.c 存在"
+          else
+            echo "::error::drivers/misc/ntsync.c 未找到，ntsync 源码缺失"
+            exit 1
+          fi
+          echo "==> ntsync 接入完成 (源码 + Makefile + Kconfig)"
 
       - name: 🔧 Set gki_defconfig (设置编译配置)
         run: |
